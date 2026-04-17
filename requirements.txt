@@ -1,0 +1,12 @@
+gradio>=5.0
+httpx>=0.27
+uvicorn>=0.30
+langfuse>=3.0
+prometheus-client>=0.20
+pyyaml>=6.0
+websockets>=12.0
+
+# LangGraph agent backend
+langchain>=1.2.3
+langgraph>=1.1.0
+langchain-openai>=0.3.0
