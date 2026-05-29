@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -126,6 +127,69 @@ def find_chunk_containing(text: str, *, domain: str | None = None) -> dict | Non
 def chunks_in_domain(domain: str, *, limit: int = 50) -> list[dict]:
     store = _kb_store()
     return [c.as_dict() for c in store.list_chunks(domain=domain, limit=limit)]
+
+
+def kb_snapshot() -> int:
+    """Return the current max chunk id for per-case eval cleanup.
+
+    The live agent's memory middleware can write conversation findings after
+    an eval prompt completes. Snapshot/restore keeps repeated eval runs from
+    accumulating those findings and biasing later cases.
+    """
+    store = _kb_store()
+    db = store._get_db()  # eval-only helper; keep production API small
+    if db is None:
+        return 0
+    try:
+        row = db.execute("SELECT COALESCE(MAX(id), 0) FROM chunks").fetchone()
+        return int(row[0]) if row else 0
+    except Exception as exc:  # pragma: no cover - defensive cleanup helper
+        log.debug("[verify] kb snapshot failed: %s", exc)
+        return 0
+    finally:
+        db.close()
+
+
+def restore_kb_snapshot(max_id: int, *, settle_s: float = 1.0) -> int:
+    """Delete chunks created after ``max_id``.
+
+    Cleanup loops briefly because ``MemoryMiddleware.after_agent`` writes
+    findings on a background thread; a single immediate DELETE can miss a late
+    insert from the just-finished eval turn.
+    """
+    deadline = time.monotonic() + max(0.0, settle_s)
+    total = 0
+    while True:
+        store = _kb_store()
+        db = store._get_db()
+        if db is None:
+            return total
+        try:
+            cur = db.execute("DELETE FROM chunks WHERE id > ?", (int(max_id),))
+            db.commit()
+            total += int(cur.rowcount)
+        except Exception as exc:  # pragma: no cover - defensive cleanup helper
+            log.debug("[verify] kb restore failed: %s", exc)
+            return total
+        finally:
+            db.close()
+
+        if time.monotonic() >= deadline:
+            return total
+        time.sleep(0.05)
+
+
+def delete_session_summary(session_id: str) -> None:
+    """Best-effort removal of the JSON session summary for an eval context."""
+    if not session_id:
+        return
+    try:
+        from graph.middleware.memory import MEMORY_PATH
+
+        path = Path(MEMORY_PATH) / f"{session_id}.json"
+        path.unlink(missing_ok=True)
+    except Exception as exc:  # pragma: no cover - cleanup must not fail evals
+        log.debug("[verify] session cleanup failed for %s: %s", session_id, exc)
 
 
 # ── setup / teardown helpers ─────────────────────────────────────────────────

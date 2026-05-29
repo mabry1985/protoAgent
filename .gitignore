@@ -18,6 +18,8 @@ build/
 *.jsonl
 # Workspace-config standard: the beads issue export is the committed source of truth
 !.beads/issues.jsonl
+config/.setup-complete
+evals/results/*.json
 
 # protoLabs Studio agent workspace (never commit)
 .automaker-lock

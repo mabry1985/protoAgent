@@ -189,6 +189,8 @@ async def _run_prompt_case(
 ) -> CaseResult:
     events: list[dict] = []
     result: TaskResult | None = None
+    context_id = case.get("context_id") or f"eval-{case['id']}"
+    kb_snapshot = verify.kb_snapshot()
 
     try:
         # Pre-seed state via direct DB writes (model never sees this).
@@ -207,11 +209,15 @@ async def _run_prompt_case(
 
         if streaming:
             events, result = await client.stream(
-                case["prompt"], timeout_s=case.get("timeout_s", 90),
+                case["prompt"],
+                timeout_s=case.get("timeout_s", 90),
+                context_id=context_id,
             )
         else:
             result = await client.ask(
-                case["prompt"], timeout_s=case.get("timeout_s", 90),
+                case["prompt"],
+                timeout_s=case.get("timeout_s", 90),
+                context_id=context_id,
             )
 
         if result is None or result.state != "completed":
@@ -281,6 +287,8 @@ async def _run_prompt_case(
         # next case.
         if "teardown" in case:
             verify.apply_teardown(case["teardown"])
+        verify.restore_kb_snapshot(kb_snapshot)
+        verify.delete_session_summary(context_id)
 
 
 async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
@@ -303,6 +311,7 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
     cid = case.get("id", "goal")
     ctx = case.get("context_id") or f"eval-goal-{cid}"
     cat, name = case.get("category", "goal"), case.get("name", cid)
+    kb_snapshot = verify.kb_snapshot()
     try:
         await client.clear_goal(ctx)
 
@@ -352,6 +361,8 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
             await client.clear_goal(ctx)
         except Exception:
             pass
+        verify.restore_kb_snapshot(kb_snapshot)
+        verify.delete_session_summary(ctx)
 
 
 # ── dispatch ────────────────────────────────────────────────────────────────

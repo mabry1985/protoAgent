@@ -25,6 +25,7 @@ This is the main entry point. It:
 """
 
 import argparse
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -1124,23 +1125,18 @@ def _main():
     )
 
     import gradio as gr
+    import inspect
     import uvicorn
     from fastapi import FastAPI, Request
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
 
-    fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
-
     # --- Scheduler lifecycle ------------------------------------------------
     # The local scheduler needs an asyncio polling task; the Workstacean
-    # adapter is a no-op start/stop. Both implement the same contract so
-    # we just call through. on_event is preferred over a lifespan
-    # context manager here — the rest of the boot is sync (uvicorn.run
-    # is the only blocking call) and FastAPI fires startup/shutdown
-    # around it.
-    @fastapi_app.on_event("startup")
-    async def _scheduler_startup() -> None:
+    # adapter is a no-op start/stop. Both implement the same contract.
+    @asynccontextmanager
+    async def _lifespan(_app):
         if _scheduler is not None:
             try:
                 await _scheduler.start()
@@ -1152,18 +1148,21 @@ def _main():
             except Exception:
                 log.exception("[cache-warmer] startup failed")
 
-    @fastapi_app.on_event("shutdown")
-    async def _scheduler_shutdown() -> None:
-        if _scheduler is not None:
-            try:
-                await _scheduler.stop()
-            except Exception:
-                log.exception("[scheduler] shutdown failed")
-        if _cache_warmer is not None:
-            try:
-                await _cache_warmer.stop()
-            except Exception:
-                log.exception("[cache-warmer] shutdown failed")
+        try:
+            yield
+        finally:
+            if _scheduler is not None:
+                try:
+                    await _scheduler.stop()
+                except Exception:
+                    log.exception("[scheduler] shutdown failed")
+            if _cache_warmer is not None:
+                try:
+                    await _cache_warmer.stop()
+                except Exception:
+                    log.exception("[cache-warmer] shutdown failed")
+
+    fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent", lifespan=_lifespan)
 
     # --- Chat API -----------------------------------------------------------
     class ChatRequest(PydanticBaseModel):
@@ -1390,11 +1389,16 @@ def _main():
         fastapi_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # --- Mount Gradio at root -----------------------------------------------
-    app = gr.mount_gradio_app(
-        fastapi_app, blocks, path="/",
-        footer_links=[],
-        favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
-    )
+    mount_kwargs = {
+        "footer_links": [],
+        "favicon_path": str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
+    }
+    mount_sig = inspect.signature(gr.mount_gradio_app)
+    for key, value in getattr(blocks, "_protoagent_launch_kwargs", {}).items():
+        if key in mount_sig.parameters:
+            mount_kwargs[key] = value
+
+    app = gr.mount_gradio_app(fastapi_app, blocks, path="/", **mount_kwargs)
 
     log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
     uvicorn.run(app, host="0.0.0.0", port=args.port)
