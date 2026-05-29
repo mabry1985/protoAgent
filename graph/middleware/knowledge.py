@@ -83,7 +83,7 @@ class KnowledgeMiddleware(AgentMiddleware):
 
     def load_memory(
         self,
-        memory_path: str = "/sandbox/memory/",
+        memory_path: str | None = None,
         max_sessions: int = 10,
         max_tokens: int = 2000,
     ) -> str:
@@ -101,6 +101,10 @@ class KnowledgeMiddleware(AgentMiddleware):
         Token counting uses the character-based approximation (chars // 4)
         because tiktoken is not guaranteed to be installed.
         """
+        if memory_path is None:
+            from graph.middleware.memory import MEMORY_PATH
+            memory_path = MEMORY_PATH
+
         # --- Guard: directory must exist ---
         if not os.path.isdir(memory_path):
             log.info(

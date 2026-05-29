@@ -27,13 +27,49 @@ log = logging.getLogger(__name__)
 # Configuration — read once at module init
 # ---------------------------------------------------------------------------
 
-MEMORY_PATH = os.environ.get("MEMORY_PATH", "/sandbox/memory/")
+_DEFAULT_MEMORY_PATH = "/sandbox/memory/"
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 
 # How long the <prior_sessions> block is cached before a disk reload (bounds
 # staleness vs per-turn I/O). Mirrors KnowledgeMiddleware's constant.
 _PRIOR_SESSIONS_TTL_S = 60.0
+
+
+def _resolve_memory_path(raw_path: str | None = None) -> str:
+    """Return a writable memory directory, falling back for local runs.
+
+    Docker deployments normally mount ``/sandbox`` writable. Local macOS/Linux
+    runs often cannot create ``/sandbox/memory``; use the same home-directory
+    fallback pattern as the knowledge store and scheduler so memory persistence
+    stays useful outside the container.
+    """
+    raw = raw_path or os.environ.get("MEMORY_PATH") or _DEFAULT_MEMORY_PATH
+    path = os.path.expanduser(raw)
+    try:
+        os.makedirs(path, exist_ok=True)
+        fd, probe = tempfile.mkstemp(dir=path, prefix=".write-probe-")
+        os.close(fd)
+        os.unlink(probe)
+        return path
+    except OSError:
+        fallback = os.path.expanduser("~/.protoagent/memory")
+        try:
+            os.makedirs(fallback, exist_ok=True)
+            fd, probe = tempfile.mkstemp(dir=fallback, prefix=".write-probe-")
+            os.close(fd)
+            os.unlink(probe)
+            log.info("[memory] %s not writable; using %s instead", path, fallback)
+            return fallback
+        except OSError:
+            return path
+
+
+MEMORY_PATH = (
+    os.path.expanduser(os.environ.get("MEMORY_PATH", _DEFAULT_MEMORY_PATH))
+    if _PERSISTENCE_DISABLED
+    else _resolve_memory_path()
+)
 
 if _PERSISTENCE_DISABLED:
     log.debug("[memory] persistence disabled via PROTOAGENT_DISABLE_MEMORY")

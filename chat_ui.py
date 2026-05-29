@@ -199,9 +199,6 @@ def create_chat_app(
     def _build() -> gr.Blocks:
         with gr.Blocks(
             title=title.replace("*", "").strip(),
-            theme=_theme,
-            css=_css,
-            head=_head,
             analytics_enabled=False,
         ) as app:
             session_id = gr.State("default")
@@ -412,7 +409,7 @@ def create_chat_app(
                                 interactive=True,
                             )
 
-                        with gr.Accordion("Worker Subagent", open=False):
+                        with gr.Accordion("Researcher Subagent", open=False):
                             worker_enabled_in = gr.Checkbox(
                                 label="Enabled", interactive=True,
                             )
@@ -549,7 +546,11 @@ def create_chat_app(
                                 else f"⚠ {err}" if err else ""
                             )
 
-                            worker = cfg["subagents"]["worker"]
+                            worker = (
+                                cfg.get("subagents", {}).get("researcher")
+                                or cfg.get("subagents", {}).get("worker")
+                                or {}
+                            )
                             identity = cfg.get("identity", {})
                             auth = cfg.get("auth", {})
                             runtime = cfg.get("runtime", {})
@@ -560,9 +561,9 @@ def create_chat_app(
                                 cfg["model"]["temperature"],
                                 cfg["model"]["max_tokens"],
                                 cfg["model"]["max_iterations"],
-                                worker["enabled"],
-                                gr.update(choices=tools, value=list(worker["tools"])),
-                                worker["max_turns"],
+                                bool(worker.get("enabled", True)),
+                                gr.update(choices=tools, value=list(worker.get("tools", []))),
+                                int(worker.get("max_turns", 40)),
                                 cfg["middleware"]["knowledge"],
                                 cfg["middleware"]["audit"],
                                 cfg["middleware"]["memory"],
@@ -613,10 +614,10 @@ def create_chat_app(
                                     "max_iterations": int(max_iter or 50),
                                 },
                                 "subagents": {
-                                    "worker": {
+                                    "researcher": {
                                         "enabled": bool(worker_enabled),
                                         "tools": list(worker_tools or []),
-                                        "max_turns": int(worker_max_turns or 20),
+                                        "max_turns": int(worker_max_turns or 40),
                                     },
                                 },
                                 "middleware": {
@@ -797,7 +798,10 @@ def create_chat_app(
 
                     model = cfg.get("model", {})
                     identity = cfg.get("identity", {})
-                    worker = cfg.get("subagents", {}).get("worker", {})
+                    worker = (
+                        cfg.get("subagents", {}).get("researcher")
+                        or cfg.get("subagents", {}).get("worker", {})
+                    )
                     mw = cfg.get("middleware", {})
                     runtime = cfg.get("runtime", {})
                     auth = cfg.get("auth", {})
@@ -947,7 +951,7 @@ def create_chat_app(
                             "name": model_name,
                         },
                         "subagents": {
-                            "worker": {
+                            "researcher": {
                                 "enabled": True,
                                 "tools": list(tools or []),
                             },
@@ -1024,11 +1028,18 @@ def create_chat_app(
         return app
 
     app = _build()
+    app._protoagent_launch_kwargs = {
+        "theme": _theme,
+        "css": _css,
+        "head": _head,
+    }
 
     _original_launch = app.launch
 
     def _launch(**kwargs):
         kwargs.setdefault("server_name", "0.0.0.0")
+        for key, value in app._protoagent_launch_kwargs.items():
+            kwargs.setdefault(key, value)
         if kwargs.pop("pwa", None) is not None:
             try:
                 return _original_launch(**kwargs, pwa=True)
